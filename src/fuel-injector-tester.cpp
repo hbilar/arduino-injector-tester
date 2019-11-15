@@ -1,8 +1,17 @@
 /*
-Arduino 2x16 LCD - Detect Buttons
-modified on 18 Feb 2019
-by Saeed Hosseini @ Electropeak
-https://electropeak.com/learn/
+
+Fuel injector tester front-end.
+
+The LCD driving routines were found at https://electropeak.com/learn/, from a
+tutorial by Saeed Hosseini @ Electropeak
+
+
+Pin-outs on my mega2560 (clone):
+
+Pin 22: Fuel pump relay (HIGH = pump off)
+Pin 50 - 53: Injectors 
+
+
 */
 #include <Arduino.h>
 #include <EEPROM.h>
@@ -23,7 +32,7 @@ const uint8_t pin_FUEL_PUMP_RELAY = 22;
 const uint8_t pin_INJECTOR_1_MASK = B00001000;  // pin 50
 const uint8_t pin_INJECTOR_2_MASK = B00000100;  // pin 51
 const uint8_t pin_INJECTOR_3_MASK = B00000010;  // pin 52
-const uint8_t pin_INJECTOR_4_MASK = B00000001;  // pin 54
+const uint8_t pin_INJECTOR_4_MASK = B00000001;  // pin 53
 
 const uint8_t dir_INJECTORS_OUT = B00001111;  // Make PORTB pins 50 - 53 outputs
 
