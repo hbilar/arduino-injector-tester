@@ -16,6 +16,9 @@ Pin 50 - 53: Injectors
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <LiquidCrystal.h>
+#include <string.h>
+#include <stdio.h>
+
 //LCD pin to Arduino
 const int pin_RS = 8; 
 const int pin_EN = 9; 
@@ -25,7 +28,6 @@ const int pin_d6 = 6;
 const int pin_d7 = 7; 
 const int pin_BL = 10; 
 
-
 // fuel pump relay pin - mega pin 40
 const uint8_t pin_FUEL_PUMP_RELAY = 22;
 // injector pins - mega pins 50 through to 53
@@ -34,10 +36,8 @@ const uint8_t pin_INJECTOR_2_MASK = B00000100;  // pin 51
 const uint8_t pin_INJECTOR_3_MASK = B00000010;  // pin 52
 const uint8_t pin_INJECTOR_4_MASK = B00000001;  // pin 53
 
-const uint8_t dir_INJECTORS_OUT = B00001111;  // Make PORTB pins 50 - 53 outputs
-
-#include <string.h>
-#include <stdio.h>
+// Make PORTB pins 50 - 53 outputs
+const uint8_t dir_INJECTORS_OUT = B00001111;
 
 typedef struct leak_test_params {
   int seconds;
@@ -106,9 +106,18 @@ typedef enum button_t {
 button_t LAST_BUTTON = NO_BUTTON;
 operation_t CURRENT_MODE = LEAK_TEST;
 operation_t LAST_MODE = NO_MODE;
-int PARAM_NUM = 0;  /* Which param we're currently modifying */
-unsigned long last_button_press_time = 0; /* when a button was last pressed */
 
+/* The PARAM_NUM variable is used to determine which parameter in a list
+   of up to three (for RPM mode) the user interface is currently showing as
+   modifiable */
+int PARAM_NUM = 0;
+
+/* The time a button was last pressed. Used for the UI handling of press-and-hold */
+unsigned long last_button_press_time = 0;
+
+/* global parameters for the various test modes. These are the initial values when
+   the arduino starts up, but they get overwritten with the saved values if any are
+   stored in the eeprom */
 leak_test_params LEAK_TEST_PARAMS = { .seconds = 60, 
                                       .max_seconds = 300, 
                                       .min_seconds = 10, 
@@ -172,8 +181,8 @@ pwm_params PWM_PARAMS = { .pulses = 30,
 
 LiquidCrystal lcd( pin_RS,  pin_EN,  pin_d4,  pin_d5,  pin_d6,  pin_d7);
 
-/* display the top line */
-void set_top_line(operation_t mode, bool running) 
+/* display the top line on the LCD */
+void set_top_line(operation_t mode) 
 {
   char buf[17];
   switch(mode) {
@@ -196,21 +205,19 @@ void set_top_line(operation_t mode, bool running)
     default:
       snprintf(buf, sizeof(buf),"Unknown mode    "); 
   }
-
-  // Add running flag
-  if (running) {
-    buf[15] = '*';
-  }
-
   lcd.setCursor(0,0);
   lcd.print(buf);
 }
 
 
+/* Display the bottom line on the LCD (at least in menu mode) */
 void set_bottom_line(operation_t mode, button_t button)
 {
     /* Print bottom line */
     char buf[17];
+
+    /* the pN_markers are used to show the user which parameter
+       he/she can currently modify */
     const char *p0_marker = PARAM_NUM == 0 ? ">" : " ";
     const char *p1_marker = PARAM_NUM == 1 ? ">" : " ";
     const char *p2_marker = PARAM_NUM == 2 ? ">" : " ";
@@ -226,6 +233,7 @@ void set_bottom_line(operation_t mode, button_t button)
         break;
         ;;
       case RPM_MODE:
+        // example: ">60s 1000rpm 75%"
         snprintf(buf, sizeof(buf), "%s%ds%s%drpm%s%d%%     ", 
                  p0_marker, RPM_MODE_PARAMS.seconds, p1_marker, 
                  RPM_MODE_PARAMS.rpm, p2_marker, RPM_MODE_PARAMS.duty); 
@@ -233,10 +241,10 @@ void set_bottom_line(operation_t mode, button_t button)
         ;;
       case PWM_MODE:
         long long us = PWM_PARAMS.microseconds;
-
         long us_big = (long)((long long)us / (long long)1000);
         long us_small = (us % 1000) / 10;
 
+        // example: ">100p 1.23ms"
         snprintf(buf, sizeof(buf), "%s%dp %s%d.%02dms     ", 
                  p0_marker, PWM_PARAMS.pulses,
                  p1_marker, (int)us_big, (int)us_small);
@@ -252,7 +260,9 @@ void set_bottom_line(operation_t mode, button_t button)
 }
 
 
-/* save settings to eeprom */
+/* save settings to eeprom
+  FIXME: This should be refactored together with the load_settings, as they're
+  basically the same function, just opposite directions */
 void save_settings(bool immediate)
 {
   if (! immediate) {
@@ -296,10 +306,10 @@ void save_settings(bool immediate)
   eadr += sizeof(PWM_PARAMS.pulses);
   EEPROM.put(eadr, PWM_PARAMS.microseconds);
   eadr += sizeof(PWM_PARAMS.microseconds);
-  
 }
 
-/* load settings from eeprom */
+/* load settings from eeprom
+  FIXME: merge with save_settings */
 void load_settings()
 {
   lcd.setCursor(0,0);
@@ -341,10 +351,10 @@ void load_settings()
   eadr += sizeof(PWM_PARAMS.pulses);
   EEPROM.get(eadr, PWM_PARAMS.microseconds);
   eadr += sizeof(PWM_PARAMS.microseconds);
-  
 }
 
-/* Get the button pressed */
+
+/* From the LCD analog signal, figure out the button pressed */
 int get_button() 
 {
   int x = analogRead (0);
@@ -367,6 +377,9 @@ int get_button()
 }
 
 
+/* Functions to modify and bound the parameters to their specific ranges.
+  FIXME: This could probably be written as one function that uses pointers to
+  the variables instead.. */
 void leak_test_change_param(int p, bool increase)
 {
   int modifier = increase ? 1 : -1;
@@ -376,6 +389,7 @@ void leak_test_change_param(int p, bool increase)
   LEAK_TEST_PARAMS.seconds = LEAK_TEST_PARAMS.seconds < LEAK_TEST_PARAMS.min_seconds ? LEAK_TEST_PARAMS.min_seconds : LEAK_TEST_PARAMS.seconds;
 }
 
+
 void full_flow_mode_change_param(int p, bool increase)
 {
   int modifier = increase ? 1 : -1;
@@ -384,6 +398,7 @@ void full_flow_mode_change_param(int p, bool increase)
   FULL_FLOW_PARAMS.seconds = FULL_FLOW_PARAMS.seconds > FULL_FLOW_PARAMS.max_seconds ? FULL_FLOW_PARAMS.max_seconds : FULL_FLOW_PARAMS.seconds;  
   FULL_FLOW_PARAMS.seconds = FULL_FLOW_PARAMS.seconds < FULL_FLOW_PARAMS.min_seconds ? FULL_FLOW_PARAMS.min_seconds : FULL_FLOW_PARAMS.seconds;  
 }
+
 
 void rpm_mode_change_param(int p, bool increase)
 {
@@ -444,7 +459,6 @@ void pwm_mode_change_param(int p, bool increase)
 long calculate_720_time_us(int rpm)
 {
   float t = 60.0 / ( (float)rpm / 2);  // how long one 720 degree cycle lasts
-
   return (long)(t * 1000000L);
 }
 
@@ -663,7 +677,7 @@ void setup() {
   /* Make injector pins outputs */
   DDRB = DDRB | dir_INJECTORS_OUT;  
 
-  set_top_line(CURRENT_MODE, false);
+  set_top_line(CURRENT_MODE);
   set_bottom_line(CURRENT_MODE, NO_BUTTON);
 }
 
@@ -783,7 +797,7 @@ void loop() {
           ;;
       }
     }
-    set_top_line(CURRENT_MODE, false);
+    set_top_line(CURRENT_MODE);
 
     /* Finally, update the bottom status line */
     set_bottom_line(CURRENT_MODE, button);
